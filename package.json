@@ -1,0 +1,36 @@
+{
+	"name": "@reddot/helmet",
+	"version": "1.0.0",
+	"description": "helmet development",
+	"bin": {
+		"helmet": "./bin/helmet.js"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ReddotCloud/skaff.git"
+	},
+	"keywords": [
+		"kubernetes",
+		"skaffold",
+		"kubectl",
+		"kubee"
+	],
+	"author": "WoLfulus <wolfulus@gmail.com>",
+	"license": "MIT",
+	"bugs": {
+		"url": "https://github.com/ReddotCloud/skaff/issues"
+	},
+	"homepage": "https://github.com/ReddotCloud/skaff#readme",
+	"dependencies": {
+		"cli-highlight": "^2.0.0",
+		"colors": "^1.3.3",
+		"dot-object": "^1.7.1",
+		"dotenv": "^6.2.0",
+		"dotenv-expand": "^4.2.0",
+		"execa": "^1.0.0",
+		"js-yaml": "^3.12.1",
+		"lodash": "^4.17.11",
+		"minimatch": "^3.0.4",
+		"yargs": "^12.0.5"
+	}
+}

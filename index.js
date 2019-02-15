@@ -14,13 +14,37 @@ const dotenv = require('dotenv');
 const dotenvExpand = require('dotenv-expand');
 const minimatch = require('minimatch');
 const { highlight } = require('cli-highlight');
+const moment = require('moment');
 const exec = require('execa');
+const Liquid = require('liquidjs');
+const Ajv = require('ajv');
+const AjvKeywords = require('ajv-keywords');
+const AjvErrors = require('better-ajv-errors');
+
+const liquid = new Liquid();
+
+/**
+ * Schema
+ */
+const ajv = new Ajv({
+	allErrors: true,
+	validateSchema: true,
+	ownProperties: true,
+	jsonPointers: true,
+	useDefaults: true,
+	$data: true
+});
+
+AjvKeywords(ajv);
+
+const schema = require('./schema');
+const validator = ajv.compile(schema);
 
 /**
  * Preloads environment variables
  */
-if (yargs.argv.envfile) {
-	let files = util.isArray(yargs.argv.envfile) ? yargs.argv.envfile : [ yargs.argv.envfile ];
+if (yargs.argv.load) {
+	let files = util.isArray(yargs.argv.load) ? yargs.argv.load : [ yargs.argv.load ];
 	for (const file of files) {
 		dotenvExpand(
 			dotenv.config({
@@ -37,45 +61,102 @@ if (yargs.argv.envfile) {
  */
 function coerceFile(file) {
 	if (file !== 'helmet.yaml') {
-		return yaml.safeLoad(fs.readFileSync(file));
+		file = yaml.safeLoad(fs.readFileSync(file));
 	} else if (fs.existsSync('helmet.yml')) {
-		return yaml.safeLoad(fs.readFileSync('helmet.yml'));
+		file = yaml.safeLoad(fs.readFileSync('helmet.yml'));
+	} else {
+		file = yaml.safeLoad(fs.readFileSync('helmet.yaml'));
 	}
-	return yaml.safeLoad(fs.readFileSync('helmet.yaml'));
+
+	const result = validator(file);
+	if (!result) {
+		console.error('Failed to validate configuration format.'.red);
+		console.error(
+			AjvErrors(schema, file, validator.errors, {
+				format: 'cli',
+				indent: 2
+			})
+		);
+		process.exit(1);
+	}
+
+	return _.merge(file || {}, {
+		profile: 'default',
+		profiles: {}
+	});
+}
+
+/**
+ * Expand values with templating
+ */
+async function expand(values, view) {
+	await Promise.all(
+		Object.entries(values).map(async ([ name, value ]) => {
+			if (typeof value === 'string') {
+				values[name] = await liquid.parseAndRender(value, view);
+			} else if (typeof value === 'object') {
+				values[name] = await expand(value, view);
+			}
+		})
+	);
+	return values;
+}
+
+function buildImageName(defaultRepo, originalImage) {
+	//const defaultRepo = 'gcr.io/wolfulus'; //argv.profile.options.repository;
+	//const originalImage = ;
+
+	if (defaultRepo === '') {
+		return originalImage;
+	}
+
+	if (defaultRepo.startsWith('gcr.io')) {
+		let originalPrefix = originalImage.match(/^gcr\.io\/[a-zA-Z-_]+\//);
+		originalPrefix = originalPrefix ? originalPrefix[0] : '';
+
+		let defaultRepoPrefix = defaultRepo.match(/^gcr\.io\/[a-zA-Z-_]+\//);
+		defaultRepoPrefix = defaultRepoPrefix ? defaultRepoPrefix[0] : '';
+
+		if (originalPrefix === defaultRepoPrefix) {
+			return defaultRepo + '/' + originalImage.substr(originalPrefix.length);
+		} else if (originalImage.startsWith(defaultRepo)) {
+			return originalImage;
+		}
+		return `${defaultRepo}/${originalImage}`;
+	}
+
+	return `${defaultRepo}/${originalImage.replace(/[\/._:@]/g, '_')}`;
 }
 
 /**
  * Main
  */
 module.exports = async function() {
+	/**
+     * Load GIT information
+     */
+
+	const gitTag = await exec('git', [ 'describe', '--tags', '--exact-match' ], { reject: false });
+	const gitCommit = await exec('git', [ 'rev-parse', '--short', 'HEAD' ], { reject: false });
+	const gitStatus = await exec('git', [ 'status', '.', '--porcelain' ]);
+	const git = {
+		commit: gitCommit.stdout || null,
+		tag: gitTag.stdout || null,
+		dirty: gitStatus.stdout.length > 0
+	};
+
+	/**
+     * Settings
+     */
 	yargs.strict().env('HELMET').demandCommand(1);
 
+	/**
+     * Options definition
+     */
 	yargs.options({
-		profile: {
-			global: true,
-			type: 'string',
-			default: 'default',
-			description: 'Which profile to use'
-		},
-		config: {
-			global: true,
-			type: 'object',
-			default: {},
-			description: 'Helmet configuration options'
-		},
-		envfile: {
-			global: true,
-			type: 'string',
-			default: '.env',
-			description: 'Loads a .env file'
-		},
-		/*
-		env: {
-			global: true,
-			type: 'string',
-			default: undefined,
-			description: 'Passes environment variables to values key'
-		},*/
+		/**
+         * Helmet file
+         */
 		file: {
 			global: true,
 			type: 'string',
@@ -83,148 +164,237 @@ module.exports = async function() {
 			coerce: coerceFile,
 			description: 'Helmet filename'
 		},
-		values: {
+
+		/**
+         * Profile name to  use
+         */
+		profile: {
+			global: true,
+			type: 'string',
+			default: undefined,
+			description: 'Profile name'
+		},
+
+		/**
+         * Sets project variables
+         */
+		project: {
 			global: true,
 			type: 'object',
 			default: {},
-			description: 'Overrides valus in releases'
+			description: 'Set project variables'
+		},
+
+		/**
+         * Sets profile variables
+         */
+		option: {
+			global: true,
+			type: 'object',
+			default: {},
+			description: 'Set profile options variables'
+		},
+
+		/**
+         * Loads environment variable files (.env)
+         */
+		load: {
+			global: true,
+			type: 'string',
+			default: '.env',
+			description: 'Loads a .env file'
+		},
+
+		/**
+         * Verbose logging
+         */
+		verbose: {
+			global: true,
+			alias: 'v',
+			type: 'boolean',
+			default: false,
+			description: 'Prints additional stuff'
 		}
 	});
 
 	/**
-     * Normalize the initial skaffold file
-     */
-	yargs.middleware(function(argv) {
-		argv.skaffold = {
-			apiVersion: 'skaffold/v1beta4',
-			kind: 'Config'
-		};
-	});
-
-	/**
-	 * Normalize helmet file with defaults
+	 * Load profile
 	 */
-	yargs.middleware(function(argv) {
-		argv.file = _.merge(
-			{
-				projects: {},
-				profile: 'default',
-				profiles: {
-					default: {
-						push: false,
-						cleanup: true,
-						forward: true,
-						repository: ''
-					}
-				}
-			},
-			argv.file
-		);
-
-		if (!(argv.file in argv.file.profiles)) {
-			throw new Error(`Unknown default profile "${argv.file.profile}" specified`);
-		}
-	});
-
-	yargs.middleware(function(argv) {
-		// Add default profile if it doesn't exists
-		argv.file.profiles = argv.file.profiles || [];
-		if (!argv.file.profiles.some((profile) => profile.name === 'default')) {
-			argv.file.profiles.push({
-				name: 'default'
-			});
+	yargs.middleware(async function(argv) {
+		// Find default profile candidates
+		let baseProfile = {};
+		const baseProfiles = Object.entries(argv.file.profiles).filter(([ name, _ ]) => name.startsWith('$'));
+		if (!baseProfiles.length) {
+			console.error('WARNING: No base profile found. No variables to override.'.yellow);
+		} else {
+			baseProfile = baseProfiles[0][1];
 		}
 
-		const profiles = (argv.file.profiles || []).map((profile) => profile.name);
-		if (profiles.indexOf(argv.profile) < 0) {
-			throw new Error(`Profile "${argv.profile}" not found in skaffold file.`);
+		// Find default profile candidates
+		const defaultProfiles = Object.entries(argv.file.profiles).filter(([ _, profile ]) => profile.default);
+		if (!defaultProfiles.length) {
+			throw new Error('No default profile found.');
 		}
-	});
+		const defaultProfile = defaultProfiles[0][0];
 
-	/**
-     * Normalizes skaffold
-     */
-	yargs.middleware(function(argv) {
-		// Configs
-		const profile = argv.file.profiles.find((profile) => profile.name === argv.profile);
+		// Gets the current and default profile
+		argv.profile = argv.profile || defaultProfile;
+		if (!(argv.profile in argv.file.profiles)) {
+			throw new Error(`Missing profile definition for "${argv.profile}"`);
+		}
 
-		// defaults <- file.config <- profile.config <- cli args
-		argv.config = _.merge(
-			{
+		const defaultValues = {
+			options: {
+				push: true,
 				cleanup: true,
-				release: '',
-				namespace: '',
-				'port-forward': false,
-				'default-repo': ''
+				forward: true,
+				repository: '',
+				tag: '{{ helmet.git.tag | default: helmet.git.commit }}{% if helmet.git.dirty %}-dirty{% endif %}'
 			},
-			argv.file.config || {},
-			profile.config || {},
-			argv.config || {}
-		);
+			projects: {}
+		};
 
-		const rootHasReleases =
-			argv.file.deploy &&
-			argv.file.deploy.helm &&
-			argv.file.deploy.helm.releases &&
-			argv.file.deploy.helm.releases.length > 0;
+		// Merge default profile into current profile
+		argv.profile = _.merge({}, defaultValues, baseProfile, argv.file.profiles[argv.profile], {
+			name: argv.profile
+		});
 
-		if (!rootHasReleases) {
-			throw new Error('Cannot find any helm releases in root deploy');
-		}
+		// Remove additional  info
+		delete argv.profile.default;
 
-		const profileHasReleases = profile.deploy && profile.deploy.helm && profile.deploy.helm.releases;
-		if (profileHasReleases) {
-			if (rootHasReleases) {
+		// Merge options from arguments
+		argv.profile.options = _.merge(argv.profile.options, argv.option || {});
+		argv.profile.options.tag = await liquid.parseAndRender(argv.profile.options.tag, {
+			helmet: {
+				env: process.env,
+				git
 			}
-		}
+		});
 
-		// Put overrides on the releases
-		if (rootHasReleases) {
-			for (const valuesName of Object.keys(argv.values)) {
-				const values = argv.values[valuesName];
-				for (const release of argv.file.deploy.helm.releases) {
-					release.overrides || {};
-					if (minimatch(release.name, valuesName, { noglobstar: true })) {
-						release.overrides = _.merge(release.overrides || {}, values);
-					}
-				}
+		// Default project values
+		Object.entries(argv.profile.projects).forEach(([ name, project ]) => {
+			argv.profile.projects[name] = _.merge(
+				{
+					values: {}
+				},
+				project
+			);
+
+			if (!project.deploy) {
+				throw new Error(`Project "${name}" has no deployment information`);
 			}
-		}
 
-		// Delete additional keys
-		if (argv.file.config) {
-			delete argv.file.config;
-		}
-
-		for (const profile of argv.file.profiles) {
-			if (profile.config) {
-				delete profile.config;
+			if (!project.deploy.name) {
+				throw new Error(`Project "${name}" is missing deployment name`);
 			}
-		}
+
+			if (!project.deploy.chart) {
+				throw new Error(`Project "${name}" is missing deployment chart path`);
+			}
+
+			if (!project.deploy.namespace) {
+				throw new Error(`Project "${name}" is missing deployment namespace`);
+			}
+
+			if (!project.image) {
+				throw new Error(`Project "${name}" is missing image information`);
+			}
+
+			if (!project.image.name) {
+				throw new Error(`Project "${name}" is missing image name`);
+			}
+
+			if (!project.image.context) {
+				throw new Error(`Project "${name}" is missing image context`);
+			}
+		});
 	});
 
 	/**
-	 * Normalize values
+	 * Normalize project settings passed through cli
 	 */
 	yargs.middleware(function(argv) {
-		const skaffold = argv.file;
-		let releases = [];
-		if (skaffold.deploy && skaffold.deploy.helm && skaffold.deploy.helm.releases) {
-			releases = skaffold.deploy.helm.releases.map((release) => release.name);
-		}
-
-		const configs = Object.keys(argv.values);
-		for (const config of configs) {
+		const keys = Object.keys(argv.project);
+		const projects = Object.keys(argv.profile.projects);
+		for (const key of keys) {
 			let found = false;
-			for (const release of releases) {
-				if (minimatch(release, config, { noglobstar: true })) {
+			for (const project of projects) {
+				if (minimatch(project, key, { noglobstar: true })) {
 					found = true;
+					_.merge(argv.profile.projects[project], argv.project[key]);
 				}
 			}
 			if (!found) {
-				throw new Error(`No release name matches "${config}" pattern. Check your values.`);
+				throw new Error(`No project name matches "${key}" pattern. Check your values.`);
 			}
 		}
+	});
+
+	/**
+     * Build skaffold config definition
+     */
+	yargs.middleware(async function(argv) {
+		const projects = Object.entries(argv.profile.projects);
+
+		argv.skaffold = {
+			apiVersion: 'skaffold/v1beta5',
+			kind: 'Config',
+			build: {
+				local: {
+					push: argv.profile.options.push
+				},
+				tagPolicy: {
+					envTemplate: {
+						template: `{{ .IMAGE_NAME }}:${argv.profile.options.tag}`
+					}
+				},
+				artifacts: projects.map(([ name, project ]) => ({
+					image: project.image.name,
+					context: project.image.context,
+					sync: project.sync
+				}))
+			},
+			deploy: {
+				helm: {
+					releases: await Promise.all(
+						projects.map(async ([ name, project ]) => {
+							const imageName = `${buildImageName(
+								argv.profile.options.repository,
+								project.image.name
+							)}:${argv.profile.options.tag}`;
+
+							const helmet = {
+								git,
+								project: {
+									name: name,
+									image: {
+										name: imageName
+									}
+								},
+								profile: {
+									name: argv.profile.name
+								},
+								timestamp: moment.utc().toISOString()
+							};
+
+							const expanded = await expand(
+								project.values,
+								_.merge({ helmet }, { helmet: { env: process.env } })
+							);
+
+							return {
+								name: project.deploy.name,
+								namespace: project.deploy.namespace,
+								chartPath: project.deploy.chart,
+								overrides: _.merge({}, expanded, {
+									helmet
+								})
+							};
+						})
+					)
+				}
+			}
+		};
 	});
 
 	/**
@@ -234,37 +404,29 @@ module.exports = async function() {
 		command: 'wear',
 		description: 'starts working on a profile',
 		handler: async (argv) => {
-			if (argv.config.release) {
-				console.log('release specified', argv.config.release);
-			}
-
-			if (argv.config.namespace) {
-				console.log('namespace specified', argv.config.namespace);
-			}
-
-			console.log(`wearing ${argv.profile.blue} helm`, argv.dry ? '(dry)'.red : '');
+			console.log(`wearing ${argv.profile.name.blue} helmet`, argv.dry ? '(dry)'.red : '');
 
 			const args = [
 				'dev',
-				'--profile',
-				argv.profile,
 				'--filename',
 				'-',
-				`--cleanup=${argv.config.cleanup ? 'true' : 'false'}`,
-				`--port-forward=${argv.config['port-forward'] ? 'true' : 'false'}`
+				`--cleanup=${argv.profile.cleanup ? 'true' : 'false'}`,
+				`--port-forward=${argv.profile.forward ? 'true' : 'false'}`
 			];
 
-			if (argv.config['default-repo']) {
-				args.push('--default-repo', argv.config['default-repo']);
+			if (argv.profile.options.repository !== '') {
+				args.push('--default-repo', argv.profile.options.repository);
 			}
 
-			console.log('Executing...'.blue);
-			console.log('');
-			console.log(' λ', [ 'skaffold', ...args ].join(' ').green);
-			console.log('');
+			if (argv.verbose) {
+				console.log('λ'.yellow, [ 'skaffold', ...args ].join(' ').green, '<<EOF');
+				console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
+				console.log('EOF');
+				console.log('');
+			}
 
 			await exec('skaffold', args, {
-				input: yaml.safeDump(argv.file),
+				input: yaml.safeDump(argv.skaffold),
 				stdout: 'inherit',
 				stderr: 'inherit',
 				env: process.env,
@@ -278,9 +440,9 @@ module.exports = async function() {
      */
 	yargs.command({
 		command: 'config',
-		description: 'prints the generated config',
+		description: 'prints the normalized config',
 		handler: async (argv) => {
-			console.log(highlight(yaml.safeDump(argv.config), { language: 'yaml' }));
+			console.log(highlight(yaml.safeDump(argv.file), { language: 'yaml' }));
 		}
 	});
 
@@ -293,6 +455,15 @@ module.exports = async function() {
 		handler: async (argv) => {
 			console.log(highlight(yaml.safeDump(argv.file), { language: 'yaml' }));
 		}
+	});
+
+	/**
+     * Errors
+     */
+	yargs.fail(function(message, error) {
+		console.error((message || '').red);
+		console.error(error.stack.red);
+		process.exit(1);
 	});
 
 	/**

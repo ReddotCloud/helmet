@@ -38,6 +38,12 @@ module.exports = {
 					additionalProperties: {
 						$ref: '#/definitions/IProject'
 					}
+				},
+				metadata: {
+					description: 'Profile metadata',
+					type: 'object',
+					default: {},
+					additionalProperties: true
 				}
 			},
 			additionalProperties: false
@@ -64,6 +70,16 @@ module.exports = {
 				},
 				repository: {
 					description: 'The base repository name',
+					type: 'string'
+				},
+				release: {
+					description: 'The release template',
+					default: '{{ project.deploy.release }}',
+					type: 'string'
+				},
+				namespace: {
+					description: 'The namespace template',
+					default: '{{ project.deploy.namespace }}',
 					type: 'string'
 				},
 				tag: {
@@ -115,21 +131,21 @@ module.exports = {
 					description: 'Deploy definition',
 					type: 'object',
 					properties: {
-						name: {
-							description: 'Deployment name',
-							type: 'string'
-						},
-						chart: {
-							description: 'Chart folder',
+						release: {
+							description: 'Release name',
 							type: 'string'
 						},
 						namespace: {
 							description: 'Namespace name',
 							type: 'string'
+						},
+						chart: {
+							description: 'Chart folder',
+							type: 'string'
 						}
 					},
 					additionalProperties: false,
-					required: [ 'name', 'chart', 'namespace' ]
+					required: [ 'release', 'namespace', 'chart' ]
 				},
 
 				/**

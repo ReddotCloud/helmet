@@ -24,16 +24,24 @@ const AjvErrors = require('better-ajv-errors');
 
 const liquid = new Liquid();
 
-liquid.registerFilter('id', (value) => {
+liquid.registerFilter('sha1', (value) => {
 	return crypto.createHash('sha1').update(value).digest('hex');
 });
 
-liquid.registerFilter('shorten', (value, size = 8) => {
-	return value.substr(0, size);
+liquid.registerFilter('md5', (value) => {
+	return crypto.createHash('md5').update(value).digest('hex');
+});
+
+liquid.registerFilter('sha256', (value) => {
+	return crypto.createHash('sha256').update(value).digest('hex');
+});
+
+liquid.registerFilter('short', (value, size = 8) => {
+	return (value || '').substr(0, size);
 });
 
 liquid.registerFilter('safe', (value) => {
-	return value.replace(/^[a-zA-Z0-1-_]/g, '_');
+	return (value || '').replace(/^[a-zA-Z0-1-_]/g, '_');
 });
 
 /**
@@ -100,22 +108,6 @@ function coerceFile(file) {
 }
 
 /**
- * Expand values with templating
- */
-async function expand(values, view) {
-	await Promise.all(
-		Object.entries(values).map(async ([ name, value ]) => {
-			if (typeof value === 'string') {
-				values[name] = await liquid.parseAndRender(value, view);
-			} else if (typeof value === 'object') {
-				values[name] = await expand(value, view);
-			}
-		})
-	);
-	return values;
-}
-
-/**
  * Builds the skaffold image name
  */
 function buildImageName(defaultRepo, originalImage) {
@@ -145,30 +137,6 @@ function buildImageName(defaultRepo, originalImage) {
  * Main
  */
 module.exports = async function() {
-	/**
-     * Load GIT information
-     */
-
-	const gitTag = await exec('git', [ 'describe', '--tags', '--exact-match' ], { reject: false });
-	const gitCommit = await exec('git', [ 'rev-parse', 'HEAD' ], { reject: false });
-	const gitBranch = await exec('git', [ 'rev-parse', '--abbrev-ref', 'HEAD' ], { reject: false });
-	const gitStatus = await exec('git', [ 'status', '.', '--porcelain' ]);
-
-	const view = {
-		timestamp: moment.utc().toISOString(),
-		user: os.userInfo().username,
-		git: {
-			commit: gitCommit.stdout || null,
-			tag: gitTag.stdout || null,
-			dirty: gitStatus.stdout.length > 0,
-			branch: gitBranch.stdout
-		},
-		env: process.env,
-		extend(...values) {
-			return _.merge({}, this, ...values);
-		}
-	};
-
 	/**
      * Settings
      */
@@ -220,6 +188,16 @@ module.exports = async function() {
 		},
 
 		/**
+         * Sets profile variables
+         */
+		metadata: {
+			global: true,
+			type: 'object',
+			default: {},
+			description: 'Set profile metadata variables'
+		},
+
+		/**
          * Loads environment variable files (.env)
          */
 		load: {
@@ -242,10 +220,70 @@ module.exports = async function() {
 	});
 
 	/**
+     * Build view variables
+     */
+	yargs.middleware(async function(argv) {
+		const gitTag = await exec('git', [ 'describe', '--tags', '--exact-match' ], { reject: false });
+		const gitCommit = await exec('git', [ 'rev-parse', 'HEAD' ], { reject: false });
+		const gitBranch = await exec('git', [ 'rev-parse', '--abbrev-ref', 'HEAD' ], { reject: false });
+		const gitStatus = await exec('git', [ 'status', '.', '--porcelain' ]);
+
+		const template = {
+			/**
+             * View data
+             */
+			variables: {
+				user: os.userInfo().username,
+				timestamp: moment.utc().toISOString(),
+				git: {
+					tag: gitTag.stdout || null,
+					commit: gitCommit.stdout || null,
+					dirty: gitStatus.stdout.length > 0,
+					branch: gitBranch.stdout
+				},
+				env: process.env
+			},
+
+			/**
+             * Renders a template
+             */
+			async renderTemplate(template, values, convert = false) {
+				const result = await liquid.parseAndRender(template, _.merge({}, this.variables, values));
+				if (convert) {
+					try {
+						return JSON.parse(result);
+					} catch (err) {
+						return result;
+					}
+				}
+				return result;
+			},
+
+			/**
+             * Renders a object with templates
+             */
+			async renderObject(obj, values, convert) {
+				await Promise.all(
+					Object.entries(obj).map(async ([ name, entry ]) => {
+						if (typeof entry === 'string') {
+							obj[name] = await this.renderTemplate(entry, values, convert);
+						} else if (typeof entry === 'object') {
+							obj[name] = await this.renderObject(entry, values, convert);
+						}
+					})
+				);
+				return obj;
+			}
+		};
+
+		argv.template = template;
+	});
+
+	/**
 	 * Load profile
 	 */
 	yargs.middleware(async function(argv) {
-		// Find default profile candidates
+		// Find base profile candidates
 		let baseProfile = {};
 		const baseProfiles = Object.entries(argv.file.profiles).filter(([ name, _ ]) => name.startsWith('$'));
 		if (!baseProfiles.length) {
@@ -267,33 +305,41 @@ module.exports = async function() {
 			throw new Error(`Missing profile definition for "${argv.profile}"`);
 		}
 
+		// Values to fill missing variables
 		const defaultValues = {
 			options: {
 				push: true,
 				cleanup: true,
 				forward: true,
 				repository: '',
-				tag: '{{ helmet.git.tag | default: helmet.git.commit }}{% if helmet.git.dirty %}-dirty{% endif %}'
+				tag: '{{ git.tag | default: git.commit | short }}{% if git.dirty %}-dirty{% endif %}'
 			},
 			projects: {}
 		};
 
 		// Merge default profile into current profile
+		// Adds name to profile
 		argv.profile = _.merge({}, defaultValues, baseProfile, argv.file.profiles[argv.profile], {
 			name: argv.profile
 		});
 
-		// Remove additional  info
+		// Remove default value that was carried from default profile
 		delete argv.profile.default;
 
-		// Merge options from arguments
+		// Merge options from cli arguments
 		argv.profile.options = _.merge(argv.profile.options, argv.option || {});
-		argv.profile.options.tag = await liquid.parseAndRender(argv.profile.options.tag, view);
+		argv.profile.metadata = _.merge(argv.profile.metadata, argv.metadata || {});
+
+		// Renders the template tag
+		argv.profile.options.tag = await argv.template.renderTemplate(argv.profile.options.tag, {
+			profile: argv.profile
+		});
 
 		// Default project values
 		Object.entries(argv.profile.projects).forEach(([ name, project ]) => {
 			argv.profile.projects[name] = _.merge(
 				{
+					name: name,
 					values: {}
 				},
 				project
@@ -303,16 +349,16 @@ module.exports = async function() {
 				throw new Error(`Project "${name}" has no deployment information`);
 			}
 
-			if (!project.deploy.name) {
-				throw new Error(`Project "${name}" is missing deployment name`);
-			}
-
-			if (!project.deploy.chart) {
-				throw new Error(`Project "${name}" is missing deployment chart path`);
+			if (!project.deploy.release) {
+				throw new Error(`Project "${name}" is missing deployment release`);
 			}
 
 			if (!project.deploy.namespace) {
 				throw new Error(`Project "${name}" is missing deployment namespace`);
+			}
+
+			if (!project.deploy.chart) {
+				throw new Error(`Project "${name}" is missing deployment chart path`);
 			}
 
 			if (!project.image) {
@@ -332,7 +378,7 @@ module.exports = async function() {
 	/**
 	 * Normalize project settings passed through cli
 	 */
-	yargs.middleware(function(argv) {
+	yargs.middleware(async function(argv) {
 		const keys = Object.keys(argv.project);
 		const projects = Object.keys(argv.profile.projects);
 		for (const key of keys) {
@@ -347,14 +393,36 @@ module.exports = async function() {
 				throw new Error(`No project name matches "${key}" pattern. Check your values.`);
 			}
 		}
+
+		for (const project of Object.values(argv.profile.projects)) {
+			const image = buildImageName(argv.profile.options.repository, project.image.name);
+			project.image.fqin = `${image}:${argv.profile.options.tag}`;
+		}
+
+		await Promise.all(
+			Object.entries(argv.profile.projects).map(async ([ name, project ]) => {
+				if (argv.profile.options.namespace) {
+					project.deploy.namespace = await argv.template.renderTemplate(argv.profile.options.namespace, {
+						project,
+						profile: argv.profile
+					});
+				}
+				if (argv.profile.options.release) {
+					project.deploy.release = await argv.template.renderTemplate(argv.profile.options.release, {
+						project,
+						profile: argv.profile
+					});
+				}
+			})
+		);
 	});
 
 	/**
      * Build skaffold config definition
      */
 	yargs.middleware(async function(argv) {
-		const projects = Object.entries(argv.profile.projects);
-
+		const { template, profile } = argv;
+		const projects = Object.entries(profile.projects);
 		argv.skaffold = {
 			apiVersion: 'skaffold/v1beta5',
 			kind: 'Config',
@@ -377,32 +445,11 @@ module.exports = async function() {
 				helm: {
 					releases: await Promise.all(
 						projects.map(async ([ name, project ]) => {
-							// Normalize this above
-							const imageName = `${buildImageName(
-								argv.profile.options.repository,
-								project.image.name
-							)}:${argv.profile.options.tag}`;
-
-							const expanded = await expand(
-								project.values,
-								view.extend({
-									project: {
-										name: name,
-										image: {
-											name: imageName
-										}
-									},
-									profile: {
-										name: argv.profile.name
-									}
-								})
-							);
-
 							return {
-								name: project.deploy.name,
+								name: project.deploy.release,
 								namespace: project.deploy.namespace,
 								chartPath: project.deploy.chart,
-								overrides: _.merge({}, expanded)
+								overrides: await template.renderObject(project, { profile, project }, true)
 							};
 						})
 					)
@@ -431,23 +478,6 @@ module.exports = async function() {
 			if (argv.profile.options.repository !== '') {
 				args.push('--default-repo', argv.profile.options.repository);
 			}
-
-			if (argv.profile.options.namespace) {
-				await Promise.all(
-					Object.entries(argv.profile.projects).map(async ([ name, project ]) => {
-						project.deploy.namespace = await liquid.parseAndRender(
-							project.deploy.namespace,
-							view.extend({
-								project,
-								profile: argv.profile
-							})
-						);
-					})
-				);
-			}
-
-			console.log(argv.profile.projects);
-			return;
 
 			if (argv.verbose) {
 				console.log('λ'.yellow, [ 'skaffold', ...args ].join(' ').green, '<<EOF');

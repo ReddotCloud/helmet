@@ -7,6 +7,7 @@ const _ = require('lodash');
 const util = require('util');
 const os = require('os');
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const yargs = require('yargs');
 const yaml = require('js-yaml');
@@ -22,6 +23,18 @@ const AjvKeywords = require('ajv-keywords');
 const AjvErrors = require('better-ajv-errors');
 
 const liquid = new Liquid();
+
+liquid.registerFilter('id', (value) => {
+	return crypto.createHash('sha1').update(value).digest('hex');
+});
+
+liquid.registerFilter('shorten', (value, size = 8) => {
+	return value.substr(0, size);
+});
+
+liquid.registerFilter('safe', (value) => {
+	return value.replace(/^[a-zA-Z0-1-_]/g, '_');
+});
 
 /**
  * Schema
@@ -102,10 +115,10 @@ async function expand(values, view) {
 	return values;
 }
 
+/**
+ * Builds the skaffold image name
+ */
 function buildImageName(defaultRepo, originalImage) {
-	//const defaultRepo = 'gcr.io/wolfulus'; //argv.profile.options.repository;
-	//const originalImage = ;
-
 	if (defaultRepo === '') {
 		return originalImage;
 	}
@@ -137,12 +150,23 @@ module.exports = async function() {
      */
 
 	const gitTag = await exec('git', [ 'describe', '--tags', '--exact-match' ], { reject: false });
-	const gitCommit = await exec('git', [ 'rev-parse', '--short', 'HEAD' ], { reject: false });
+	const gitCommit = await exec('git', [ 'rev-parse', 'HEAD' ], { reject: false });
+	const gitBranch = await exec('git', [ 'rev-parse', '--abbrev-ref', 'HEAD' ], { reject: false });
 	const gitStatus = await exec('git', [ 'status', '.', '--porcelain' ]);
-	const git = {
-		commit: gitCommit.stdout || null,
-		tag: gitTag.stdout || null,
-		dirty: gitStatus.stdout.length > 0
+
+	const view = {
+		timestamp: moment.utc().toISOString(),
+		user: os.userInfo().username,
+		git: {
+			commit: gitCommit.stdout || null,
+			tag: gitTag.stdout || null,
+			dirty: gitStatus.stdout.length > 0,
+			branch: gitBranch.stdout
+		},
+		env: process.env,
+		extend(...values) {
+			return _.merge({}, this, ...values);
+		}
 	};
 
 	/**
@@ -264,12 +288,7 @@ module.exports = async function() {
 
 		// Merge options from arguments
 		argv.profile.options = _.merge(argv.profile.options, argv.option || {});
-		argv.profile.options.tag = await liquid.parseAndRender(argv.profile.options.tag, {
-			helmet: {
-				env: process.env,
-				git
-			}
-		});
+		argv.profile.options.tag = await liquid.parseAndRender(argv.profile.options.tag, view);
 
 		// Default project values
 		Object.entries(argv.profile.projects).forEach(([ name, project ]) => {
@@ -358,37 +377,32 @@ module.exports = async function() {
 				helm: {
 					releases: await Promise.all(
 						projects.map(async ([ name, project ]) => {
+							// Normalize this above
 							const imageName = `${buildImageName(
 								argv.profile.options.repository,
 								project.image.name
 							)}:${argv.profile.options.tag}`;
 
-							const helmet = {
-								git,
-								project: {
-									name: name,
-									image: {
-										name: imageName
-									}
-								},
-								profile: {
-									name: argv.profile.name
-								},
-								timestamp: moment.utc().toISOString()
-							};
-
 							const expanded = await expand(
 								project.values,
-								_.merge({ helmet }, { helmet: { env: process.env } })
+								view.extend({
+									project: {
+										name: name,
+										image: {
+											name: imageName
+										}
+									},
+									profile: {
+										name: argv.profile.name
+									}
+								})
 							);
 
 							return {
 								name: project.deploy.name,
 								namespace: project.deploy.namespace,
 								chartPath: project.deploy.chart,
-								overrides: _.merge({}, expanded, {
-									helmet
-								})
+								overrides: _.merge({}, expanded)
 							};
 						})
 					)
@@ -413,6 +427,55 @@ module.exports = async function() {
 				`--cleanup=${argv.profile.cleanup ? 'true' : 'false'}`,
 				`--port-forward=${argv.profile.forward ? 'true' : 'false'}`
 			];
+
+			if (argv.profile.options.repository !== '') {
+				args.push('--default-repo', argv.profile.options.repository);
+			}
+
+			if (argv.profile.options.namespace) {
+				await Promise.all(
+					Object.entries(argv.profile.projects).map(async ([ name, project ]) => {
+						project.deploy.namespace = await liquid.parseAndRender(
+							project.deploy.namespace,
+							view.extend({
+								project,
+								profile: argv.profile
+							})
+						);
+					})
+				);
+			}
+
+			console.log(argv.profile.projects);
+			return;
+
+			if (argv.verbose) {
+				console.log('λ'.yellow, [ 'skaffold', ...args ].join(' ').green, '<<EOF');
+				console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
+				console.log('EOF');
+				console.log('');
+			}
+
+			await exec('skaffold', args, {
+				input: yaml.safeDump(argv.skaffold),
+				stdout: 'inherit',
+				stderr: 'inherit',
+				env: process.env,
+				cwd: process.cwd()
+			});
+		}
+	});
+
+	/**
+     * Wear command
+     */
+	yargs.command({
+		command: 'deploy',
+		description: 'deploy a profile',
+		handler: async (argv) => {
+			console.log(`deploying ${argv.profile.name.blue} helmet`, argv.dry ? '(dry)'.red : '');
+
+			const args = [ 'deploy', '--filename', '-' ];
 
 			if (argv.profile.options.repository !== '') {
 				args.push('--default-repo', argv.profile.options.repository);

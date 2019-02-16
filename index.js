@@ -449,7 +449,7 @@ module.exports = async function() {
 								name: project.deploy.release,
 								namespace: project.deploy.namespace,
 								chartPath: project.deploy.chart,
-								overrides: await template.renderObject(project, { profile, project }, true)
+								overrides: await template.renderObject(project.values, { profile, project }, true)
 							};
 						})
 					)
@@ -512,10 +512,9 @@ module.exports = async function() {
 			}
 
 			if (argv.verbose) {
-				console.log('λ'.yellow, [ 'skaffold', ...args ].join(' ').green, '<<EOF');
+				console.log(' Command:'.yellow, [ 'skaffold', ...args ].join(' ').green);
+				console.log('Skaffold:'.yellow);
 				console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
-				console.log('EOF');
-				console.log('');
 			}
 
 			await exec('skaffold', args, {

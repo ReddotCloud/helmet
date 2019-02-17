@@ -1,6 +1,43 @@
 Helmet
 ======
 
+Helmet is a helper tool around `helm`, `skaffold` and `kubectl`.
+
+Helmet File
+===========
+
+```yaml
+profiles:
+  $common:
+    options:
+      push: true
+      cleanup: false
+      forward: false
+      repository: wolfulus
+    projects:
+      app:
+        image:
+          name: app
+          context: .
+        sync:
+          '**.*.js': '.'
+        deploy:
+          release: app
+          namespace: app-ns
+          chart: ./chart/app
+        values:
+          image: "{{ project.image.fqin }}"
+          port: 3000
+
+  local:
+
+  development:
+
+  staging:
+
+  production:
+
+```
 
 Templating
 ==========
@@ -21,7 +58,7 @@ Template
 
 Output
 
-> `17b9183a08e7111fc6a38a4354fa6e92``
+> `17b9183a08e7111fc6a38a4354fa6e92`
 
 ---
 

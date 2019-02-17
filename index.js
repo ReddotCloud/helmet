@@ -21,6 +21,13 @@ const Liquid = require('liquidjs');
 const Ajv = require('ajv');
 const AjvKeywords = require('ajv-keywords');
 const AjvErrors = require('better-ajv-errors');
+const semver = require('semver');
+
+const pkg = require('./package.json');
+
+/**
+ * Liquid.js
+ */
 
 const liquid = new Liquid();
 
@@ -134,13 +141,60 @@ function buildImageName(defaultRepo, originalImage) {
 }
 
 /**
+ * Asserts a dependency version
+ */
+function assertVersion(name, version, expression) {
+	if (!semver.valid(version)) {
+		console.error(`WARNING: Couldn't parse ${name} version.`.yellow);
+	} else {
+		if (!semver.satisfies(version, expression)) {
+			console.error(`ERROR: ${name} version ${version} doesn't satisfy "${expression}"`.red);
+			process.exit(1);
+		}
+	}
+	return true;
+}
+
+/**
+ * Checks for a dependency
+ */
+async function checkDependency(command, args, wanted, regex) {
+	const child = await exec(command, args, { reject: false });
+	if (child.failed) {
+		console.error(`You must have ${comand} installed and working.`.red);
+		child.exit(1);
+	} else {
+		const version = regex.exec(child.stdout);
+		if (!version) {
+			console.log(`WARNING: Cannot detect ${command} version`.yellow);
+		} else {
+			assertVersion(command, version[1], wanted);
+		}
+	}
+}
+
+/**
+ * Dependencies
+ */
+async function checkDependencies() {
+	await checkDependency('kubectl', [ 'version' ], '^1.x', /Client.*GitVersion:"v(.*?)"/);
+	await checkDependency('helm', [ 'version' ], '^2.x', /Client.*SemVer:"v(.*?)"/);
+	await checkDependency('skaffold', [ 'version' ], '^0.22', /v(.*)/);
+}
+
+/**
  * Main
  */
 module.exports = async function() {
 	/**
+     * Dependencies
+     */
+	await checkDependencies();
+
+	/**
      * Settings
      */
-	yargs.strict().env('HELMET').demandCommand(1);
+	yargs.version(pkg.version).strict().env('HELMET').demandCommand(1);
 
 	/**
      * Options definition
@@ -424,7 +478,7 @@ module.exports = async function() {
 		const { template, profile } = argv;
 		const projects = Object.entries(profile.projects);
 		argv.skaffold = {
-			apiVersion: 'skaffold/v1beta5',
+			apiVersion: 'skaffold/v1beta4',
 			kind: 'Config',
 			build: {
 				local: {
@@ -474,16 +528,14 @@ module.exports = async function() {
 				`--cleanup=${argv.profile.cleanup ? 'true' : 'false'}`,
 				`--port-forward=${argv.profile.forward ? 'true' : 'false'}`
 			];
-
 			if (argv.profile.options.repository !== '') {
 				args.push('--default-repo', argv.profile.options.repository);
 			}
 
 			if (argv.verbose) {
-				console.log('λ'.yellow, [ 'skaffold', ...args ].join(' ').green, '<<EOF');
+				console.log(' Command:'.yellow, [ 'skaffold', ...args ].join(' ').green);
+				console.log('Skaffold:'.yellow);
 				console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
-				console.log('EOF');
-				console.log('');
 			}
 
 			await exec('skaffold', args, {
@@ -497,7 +549,7 @@ module.exports = async function() {
 	});
 
 	/**
-     * Wear command
+     * Deploy command
      */
 	yargs.command({
 		command: 'deploy',
@@ -506,7 +558,6 @@ module.exports = async function() {
 			console.log(`deploying ${argv.profile.name.blue} helmet`, argv.dry ? '(dry)'.red : '');
 
 			const args = [ 'deploy', '--filename', '-' ];
-
 			if (argv.profile.options.repository !== '') {
 				args.push('--default-repo', argv.profile.options.repository);
 			}
@@ -517,7 +568,7 @@ module.exports = async function() {
 				console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
 			}
 
-			await exec('skaffold', args, {
+			await exec('skaffold.exe', args, {
 				input: yaml.safeDump(argv.skaffold),
 				stdout: 'inherit',
 				stderr: 'inherit',
@@ -545,7 +596,18 @@ module.exports = async function() {
 		command: 'skaffold',
 		description: 'prints the generated skaffold file',
 		handler: async (argv) => {
-			console.log(highlight(yaml.safeDump(argv.file), { language: 'yaml' }));
+			console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
+		}
+	});
+
+	/**
+     * Skaffold command
+     */
+	yargs.command({
+		command: 'version',
+		description: 'prints the version',
+		handler: async (argv) => {
+			console.log(pkg.version);
 		}
 	});
 

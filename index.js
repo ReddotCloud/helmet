@@ -569,7 +569,7 @@ module.exports = async function() {
 				console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
 			}
 
-			await exec('skaffold.exe', args, {
+			await exec('skaffold', args, {
 				input: yaml.safeDump(argv.skaffold),
 				stdout: 'inherit',
 				stderr: 'inherit',

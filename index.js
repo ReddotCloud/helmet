@@ -501,6 +501,7 @@ module.exports = async function() {
 						projects.map(async ([ name, project ]) => {
 							return {
 								name: project.deploy.release,
+								recreatePods: project.deploy.recreate,
 								namespace: project.deploy.namespace,
 								chartPath: project.deploy.chart,
 								overrides: await template.renderObject(project.values, { profile, project }, true)

@@ -131,6 +131,11 @@ module.exports = {
 					description: 'Deploy definition',
 					type: 'object',
 					properties: {
+						recreate: {
+							description: 'Recreate pods',
+							type: 'boolean',
+							default: false
+						},
 						release: {
 							description: 'Release name',
 							type: 'string'

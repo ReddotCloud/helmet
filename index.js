@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const path = require('path');
 const yargs = require('yargs');
 const yaml = require('js-yaml');
+const dot = require('dot-object');
 const dotenv = require('dotenv');
 const dotenvExpand = require('dotenv-expand');
 const minimatch = require('minimatch');
@@ -24,6 +25,8 @@ const AjvErrors = require('better-ajv-errors');
 const semver = require('semver');
 
 const pkg = require('./package.json');
+
+const dotargv = dot.dot(Object.assign({}, yargs.argv));
 
 /**
  * Liquid.js
@@ -49,6 +52,44 @@ liquid.registerFilter('short', (value, size = 8) => {
 
 liquid.registerFilter('safe', (value) => {
 	return (value || '').replace(/^[a-zA-Z0-1-_]/g, '_');
+});
+
+liquid.registerFilter('required', function(value) {
+	if (typeof value === 'undefined') {
+		throw new Error('Required value missing.');
+	}
+	return value;
+});
+
+// Usage: {% upper name%}
+liquid.registerTag('meta', {
+	parse: function(token, _) {
+		this.path = token.args;
+	},
+	render: function(scope, _) {
+		for (const context of scope.contexts) {
+			if (this.path in context.profile.metadata) {
+				return Promise.resolve(liquid.evalValue(`profile.metadata.${this.path}`, scope));
+			}
+		}
+		return Promise.reject(
+			new Error(`Could not find metadata "${this.path}". Did you miss --metadata.${this.path}?`)
+		);
+	}
+});
+
+liquid.registerTag('param', {
+	parse: function(token, _) {
+		this.path = token.args;
+	},
+	render: function(scope, _) {
+		if (!(this.path in dotargv)) {
+			return Promise.reject(
+				new Error(`Param "${this.path}" is used in this profile. Did you miss --${this.path}?`)
+			);
+		}
+		return dotargv[this.path];
+	}
 });
 
 /**
@@ -194,7 +235,7 @@ module.exports = async function() {
 	/**
      * Settings
      */
-	yargs.version(pkg.version).strict().env('HELMET').demandCommand(1);
+	yargs.version(pkg.version).env('HELMET').demandCommand(1);
 
 	/**
      * Options definition
@@ -616,8 +657,9 @@ module.exports = async function() {
      * Errors
      */
 	yargs.fail(function(message, error) {
-		console.error((message || '').red);
-		console.error(error.stack.red);
+		error = error.originalError || error || {};
+		console.error((error.message || 'Unknown error').red);
+		// console.error(error.stack.red);
 		process.exit(1);
 	});
 

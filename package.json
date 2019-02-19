@@ -1,6 +1,6 @@
 {
 	"name": "@reddot/helmet",
-	"version": "0.0.4",
+	"version": "0.0.5",
 	"description": "helmet development",
 	"bin": {
 		"helmet": "./bin/helmet.js"
@@ -9,7 +9,12 @@
 		"type": "git",
 		"url": "git+https://github.com/ReddotCloud/skaff.git"
 	},
-	"keywords": [ "kubernetes", "skaffold", "kubectl", "kubee" ],
+	"keywords": [
+		"kubernetes",
+		"skaffold",
+		"kubectl",
+		"kubee"
+	],
 	"author": "WoLfulus <wolfulus@gmail.com>",
 	"license": "MIT",
 	"bugs": {

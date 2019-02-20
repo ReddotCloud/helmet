@@ -321,7 +321,7 @@ module.exports = async function() {
 		const gitTag = await exec('git', [ 'describe', '--tags', '--exact-match' ], { reject: false });
 		const gitCommit = await exec('git', [ 'rev-parse', 'HEAD' ], { reject: false });
 		const gitBranch = await exec('git', [ 'rev-parse', '--abbrev-ref', 'HEAD' ], { reject: false });
-		const gitStatus = await exec('git', [ 'status', '.', '--porcelain' ]);
+		const gitStatus = await exec('git', [ 'status', '.', '--porcelain' ], { reject: false });
 
 		const template = {
 			/**

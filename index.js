@@ -621,6 +621,37 @@ module.exports = async function() {
 	});
 
 	/**
+     * Destroy command
+     */
+	yargs.command({
+		command: 'destroy',
+		description: 'destroy a release',
+		handler: async (argv) => {
+			for (const release of argv.skaffold.deploy.helm.releases) {
+				console.log('removing release'.green, release.name.blue);
+				const deleteRelease = await exec('helm', [ 'delete', release.name, '--purge' ], {
+					stdout: 'inherit',
+					stderr: 'inherit',
+					reject: false
+				});
+				if (deleteRelease.failed) {
+					console.log('helm delete failed'.red);
+				}
+
+				console.log('removing namespace'.green, release.namespace.blue);
+				const deleteNamespace = await exec('kubectl', [ 'delete', 'ns', release.namespace ], {
+					stdout: 'inherit',
+					stderr: 'inherit',
+					reject: false
+				});
+				if (deleteNamespace.failed) {
+					console.log('kubectl delete ns failed'.red);
+				}
+			}
+		}
+	});
+
+	/**
      * Config command
      */
 	yargs.command({

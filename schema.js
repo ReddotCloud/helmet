@@ -74,12 +74,12 @@ module.exports = {
 				},
 				release: {
 					description: 'The release template',
-					default: '{{ project.deploy.release }}',
+					default: '{{ deployment.name }}',
 					type: 'string'
 				},
 				namespace: {
 					description: 'The namespace template',
-					default: '{{ project.deploy.namespace }}',
+					default: '{{ deployment.namespace }}',
 					type: 'string'
 				},
 				tag: {
@@ -127,42 +127,45 @@ module.exports = {
 				/**
                  * Deploy
                  */
-				deploy: {
-					description: 'Deploy definition',
+				deployments: {
+					description: 'Deployment definitions',
 					type: 'object',
-					properties: {
-						recreate: {
-							description: 'Recreate pods',
-							type: 'boolean',
-							default: false
-						},
-						release: {
-							description: 'Release name',
-							type: 'string'
-						},
-						namespace: {
-							description: 'Namespace name',
-							type: 'string'
-						},
-						chart: {
-							description: 'Chart folder',
-							type: 'string'
-						}
-					},
-					additionalProperties: false,
-					required: [ 'release', 'namespace', 'chart' ]
-				},
+					additionalProperties: {
+						$ref: '#/definitions/IDeployment'
+					}
+				}
+			},
+			additionalProperties: false
+		},
 
-				/**
-                 * Values
-                 */
+		/**
+         * Project definition
+         */
+		IDeployment: {
+			description: 'Deploy definition',
+			type: 'object',
+			properties: {
+				recreate: {
+					description: 'Recreate pods',
+					type: 'boolean',
+					default: false
+				},
+				namespace: {
+					description: 'Namespace name',
+					type: 'string'
+				},
+				chart: {
+					description: 'Chart folder',
+					type: 'string'
+				},
 				values: {
 					description: 'Override values',
 					type: 'object',
 					additionalProperties: true
 				}
 			},
-			additionalProperties: false
+			additionalProperties: false,
+			required: [ 'namespace', 'chart' ]
 		}
 	}
 };

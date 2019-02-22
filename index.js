@@ -224,6 +224,34 @@ async function checkDependencies() {
 }
 
 /**
+ * Transforms an object into a named array
+ * {
+ *   test: {
+ *     hello: "world"
+ *   }
+ * }
+ * ->
+ * [
+ *   {
+ *     name: "test",
+ *     hello: "world"
+ *   }
+ * ]
+ */
+Object.prototype.toNamedArray = function() {
+	return Object.entries(this).map(([ name, object ]) => _.merge({ name }, object));
+};
+
+/**
+ * Injects the object name into object's children
+ */
+Object.prototype.injectName = function(key = 'name') {
+	return Object.entries(this)
+		.map(([ name, object ]) => _.merge({ [key]: name }, object))
+		.reduce((prev, current) => _.merge(prev, { [`${current[key]}`]: current }), {});
+};
+
+/**
  * Main
  */
 module.exports = async function() {
@@ -440,31 +468,31 @@ module.exports = async function() {
 				project
 			);
 
-			if (!project.deploy) {
+			argv.profile.projects[name].deployments = project.deployments.injectName();
+
+			/*
+			if (!project.deployments) {
 				throw new Error(`Project "${name}" has no deployment information`);
 			}
 
-			if (!project.deploy.release) {
+			if (!project.deployments.release) {
 				throw new Error(`Project "${name}" is missing deployment release`);
 			}
 
-			if (!project.deploy.namespace) {
+			if (!project.deployments.namespace) {
 				throw new Error(`Project "${name}" is missing deployment namespace`);
 			}
 
-			if (!project.deploy.chart) {
+			if (!project.deployments.chart) {
 				throw new Error(`Project "${name}" is missing deployment chart path`);
-			}
+            }
+            */
 
-			if (!project.image) {
-				throw new Error(`Project "${name}" is missing image information`);
-			}
-
-			if (!project.image.name) {
+			if (project.image && !project.image.name) {
 				throw new Error(`Project "${name}" is missing image name`);
 			}
 
-			if (!project.image.context) {
+			if (project.image && !project.image.context) {
 				throw new Error(`Project "${name}" is missing image context`);
 			}
 		});
@@ -489,24 +517,30 @@ module.exports = async function() {
 			}
 		}
 
-		for (const project of Object.values(argv.profile.projects)) {
+		for (const project of Object.values(argv.profile.projects).filter((project) => !!project.image)) {
 			const image = buildImageName(argv.profile.options.repository, project.image.name);
 			project.image.fqin = `${image}:${argv.profile.options.tag}`;
 		}
 
 		await Promise.all(
-			Object.entries(argv.profile.projects).map(async ([ name, project ]) => {
+			Object.values(argv.profile.projects).map(async (project) => {
 				if (argv.profile.options.namespace) {
-					project.deploy.namespace = await argv.template.renderTemplate(argv.profile.options.namespace, {
-						project,
-						profile: argv.profile
-					});
+					for (const deployment of Object.values(project.deployments)) {
+						deployment.namespace = await argv.template.renderTemplate(argv.profile.options.namespace, {
+							deployment,
+							project,
+							profile: argv.profile
+						});
+					}
 				}
 				if (argv.profile.options.release) {
-					project.deploy.release = await argv.template.renderTemplate(argv.profile.options.release, {
-						project,
-						profile: argv.profile
-					});
+					for (const deployment of Object.values(project.deployments)) {
+						deployment.release = await argv.template.renderTemplate(argv.profile.options.release, {
+							deployment,
+							project,
+							profile: argv.profile
+						});
+					}
 				}
 			})
 		);
@@ -517,7 +551,21 @@ module.exports = async function() {
      */
 	yargs.middleware(async function(argv) {
 		const { template, profile } = argv;
-		const projects = Object.entries(profile.projects);
+		const projects = Object.values(profile.projects);
+
+		const deployments = projects
+			.map((project) =>
+				Object.entries(project.deployments || {}).map((deployment) => {
+					return _.merge(
+						{
+							name: deployment[0].project
+						},
+						deployment[1]
+					);
+				})
+			)
+			.reduce((prev, curr) => prev.concat(curr), []);
+
 		argv.skaffold = {
 			apiVersion: 'skaffold/v1beta4',
 			kind: 'Config',
@@ -530,22 +578,26 @@ module.exports = async function() {
 						template: `{{ .IMAGE_NAME }}:${argv.profile.options.tag}`
 					}
 				},
-				artifacts: projects.map(([ name, project ]) => ({
+				artifacts: projects.filter((project) => !!project.image).map((project) => ({
 					image: project.image.name,
 					context: project.image.context,
-					sync: project.sync
+					sync: project.sync || {}
 				}))
 			},
 			deploy: {
 				helm: {
 					releases: await Promise.all(
-						projects.map(async ([ name, project ]) => {
+						deployments.map(async (deployment) => {
 							return {
-								name: project.deploy.release,
-								recreatePods: project.deploy.recreate,
-								namespace: project.deploy.namespace,
-								chartPath: project.deploy.chart,
-								overrides: await template.renderObject(project.values, { profile, project }, true)
+								name: deployment.release,
+								recreatePods: deployment.recreate,
+								namespace: deployment.namespace,
+								chartPath: deployment.chart,
+								overrides: await template.renderObject(
+									deployment.values || {},
+									{ profile, project: deployment.project, deployment },
+									true
+								)
 							};
 						})
 					)

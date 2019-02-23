@@ -556,12 +556,7 @@ module.exports = async function() {
 		const deployments = projects
 			.map((project) =>
 				Object.entries(project.deployments || {}).map((deployment) => {
-					return _.merge(
-						{
-							name: deployment[0].project
-						},
-						deployment[1]
-					);
+					return _.merge({ project }, deployment[1]);
 				})
 			)
 			.reduce((prev, curr) => prev.concat(curr), []);
@@ -700,17 +695,6 @@ module.exports = async function() {
 					console.log('kubectl delete ns failed'.red);
 				}
 			}
-		}
-	});
-
-	/**
-     * Config command
-     */
-	yargs.command({
-		command: 'config',
-		description: 'prints the normalized config',
-		handler: async (argv) => {
-			console.log(highlight(yaml.safeDump(argv.file), { language: 'yaml' }));
 		}
 	});
 

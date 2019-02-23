@@ -164,8 +164,7 @@ module.exports = {
 					additionalProperties: true
 				}
 			},
-			additionalProperties: false,
-			required: [ 'namespace', 'chart' ]
+			additionalProperties: false
 		}
 	}
 };

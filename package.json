@@ -1,6 +1,6 @@
 {
 	"name": "@reddot/helmet",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "helmet development",
 	"bin": {
 		"helmet": "./bin/helmet.js"

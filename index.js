@@ -202,8 +202,14 @@ function assertVersion(name, version, expression) {
 async function checkDependency(command, args, wanted, regex) {
 	const child = await exec(command, args, { reject: false });
 	if (child.failed) {
-		console.error(`You must have ${comand} installed and working.`.red);
-		child.exit(1);
+		console.error(`You must have ${command} installed and working.`.red);
+		if (child.stdout) {
+			console.error(child.stdout.yellow);
+		}
+		if (child.stderr) {
+			console.error(child.stderr.red);
+		}
+		process.exit(1);
 	} else {
 		const version = regex.exec(child.stdout);
 		if (!version) {
@@ -386,13 +392,19 @@ module.exports = async function() {
              * Renders a object with templates
              */
 			async renderObject(obj, values, convert) {
+				if (typeof obj === 'string') {
+					return await this.renderTemplate(obj, values, convert);
+				}
+				if (util.isArray(obj)) {
+					return await Promise.all(
+						obj.map(async (value) => {
+							return await this.renderTemplate(value, values, convert);
+						})
+					);
+				}
 				await Promise.all(
 					Object.entries(obj).map(async ([ name, entry ]) => {
-						if (typeof entry === 'string') {
-							obj[name] = await this.renderTemplate(entry, values, convert);
-						} else if (typeof entry === 'object') {
-							obj[name] = await this.renderObject(entry, values, convert);
-						}
+						obj[name] = await this.renderObject(entry, values, convert);
 					})
 				);
 				return obj;
@@ -724,9 +736,13 @@ module.exports = async function() {
      * Errors
      */
 	yargs.fail(function(message, error) {
-		error = error.originalError || error || {};
-		console.error((error.message || 'Unknown error').red);
-		// console.error(error.stack.red);
+		if (message) {
+			console.error(message.red);
+		} else {
+			error = (error || {}).originalError || error || {};
+			console.error((error.message || message || 'Unknown error').red);
+			console.error(error.stack.red);
+		}
 		process.exit(1);
 	});
 

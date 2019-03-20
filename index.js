@@ -697,14 +697,16 @@ module.exports = async function() {
 					console.log('helm delete failed'.red);
 				}
 
-				console.log('removing namespace'.green, release.namespace.blue);
-				const deleteNamespace = await exec('kubectl', [ 'delete', 'ns', release.namespace ], {
-					stdout: 'inherit',
-					stderr: 'inherit',
-					reject: false
-				});
-				if (deleteNamespace.failed) {
-					console.log('kubectl delete ns failed'.red);
+				if (argv.withNamespace) {
+					console.log('removing namespace'.green, release.namespace.blue);
+					const deleteNamespace = await exec('kubectl', [ 'delete', 'ns', release.namespace ], {
+						stdout: 'inherit',
+						stderr: 'inherit',
+						reject: false
+					});
+					if (deleteNamespace.failed) {
+						console.log('kubectl delete ns failed'.red);
+					}
 				}
 			}
 		}

@@ -398,7 +398,7 @@ module.exports = async function() {
 				if (util.isArray(obj)) {
 					return await Promise.all(
 						obj.map(async (value) => {
-							return await this.renderTemplate(value, values, convert);
+							return await this.renderObject(value, values, convert);
 						})
 					);
 				}

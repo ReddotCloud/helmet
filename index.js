@@ -636,7 +636,8 @@ module.exports = async function() {
 			if (argv.verbose) {
 				console.log(' Command:'.yellow, [ 'skaffold', ...args ].join(' ').green);
 				console.log('Skaffold:'.yellow);
-				console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
+                console.log(highlight(yaml.safeDump(argv.skaffold), { language: 'yaml' }));
+                args.push('--verbosity', 'debug');
 			}
 
 			await exec('skaffold', args, {

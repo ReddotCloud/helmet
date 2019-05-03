@@ -226,7 +226,7 @@ async function checkDependency(command, args, wanted, regex) {
 async function checkDependencies() {
 	await checkDependency('kubectl', [ 'version' ], '^1.x', /Client.*GitVersion:"v(.*?)"/);
 	await checkDependency('helm', [ 'version' ], '^2.x', /Client.*SemVer:"v(.*?)"/);
-	await checkDependency('skaffold', [ 'version' ], '^0.22', /v(.*)/);
+	await checkDependency('skaffold', [ 'version' ], '^0.28', /v(.*)/);
 }
 
 /**

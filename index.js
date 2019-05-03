@@ -574,7 +574,7 @@ module.exports = async function() {
 			.reduce((prev, curr) => prev.concat(curr), []);
 
 		argv.skaffold = {
-			apiVersion: 'skaffold/v1beta4',
+			apiVersion: 'skaffold/v1beta9',
 			kind: 'Config',
 			build: {
 				local: {
